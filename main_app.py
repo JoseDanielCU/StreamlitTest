@@ -4,144 +4,121 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
-from sklearn.datasets import fetch_openml
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-
-from streamlit_drawable_canvas import st_canvas
-from PIL import Image
-
-# =========================
-# CONFIGURACIÓN
-# =========================
-st.set_page_config(page_title="Clasificador MNIST", layout="wide")
-st.title("🧠 Clasificador de Dígitos Escritos a Mano - MNIST")
-
-# =========================
-# CARGAR DATASET
-# =========================
-@st.cache_data
-def load_data():
-    mnist = fetch_openml("mnist_784", version=1)
-    X = mnist.data.astype("float32") / 255.0
-    y = mnist.target.astype("int")
-    return X, y
-
-X, y = load_data()
-
-# Reducimos tamaño para que la app no sea muy pesada
-X_small, _, y_small, _ = train_test_split(X, y, train_size=10000, random_state=42)
-
-X_train, X_test, y_train, y_test = train_test_split(
-    X_small, y_small, test_size=0.2, random_state=42
+from sklearn.datasets import load_wine
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import StratifiedKFold, cross_validate
+from sklearn.metrics import (
+    accuracy_score,
+    precision_score,
+    recall_score,
+    f1_score,
+    confusion_matrix
 )
 
-# =========================
-# SIDEBAR CONFIGURACIÓN
-# =========================
-st.sidebar.header("⚙️ Configuración")
+# ==============================
+# Configuración inicial
+# ==============================
+st.set_page_config(page_title="Wine Classification", layout="wide")
+st.title("🍷 Clasificación - Dataset Wine")
 
-model_option = st.sidebar.selectbox(
-    "Seleccione el modelo",
-    ("KNN", "SVM", "Random Forest", "Logistic Regression")
+# ==============================
+# Cargar datos
+# ==============================
+wine = load_wine()
+X = wine.data
+y = wine.target
+
+df = pd.DataFrame(X, columns=wine.feature_names)
+df["target"] = y
+
+st.subheader("Vista del Dataset")
+st.dataframe(df.head())
+
+# ==============================
+# Sidebar - Parámetros del modelo
+# ==============================
+st.sidebar.header("⚙️ Configuración del Modelo")
+
+max_depth = st.sidebar.slider("Profundidad máxima del árbol",
+                               min_value=1,
+                               max_value=20,
+                               value=3)
+
+n_splits = st.sidebar.slider("Número de folds (Cross Validation)",
+                             min_value=3,
+                             max_value=10,
+                             value=5)
+
+criterion = st.sidebar.selectbox("Criterio",
+                                  ["gini", "entropy", "log_loss"])
+
+# ==============================
+# Modelo
+# ==============================
+model = DecisionTreeClassifier(
+    max_depth=max_depth,
+    criterion=criterion,
+    random_state=42
 )
 
-# =========================
-# SELECCIÓN DEL MODELO
-# =========================
-if model_option == "KNN":
-    model = KNeighborsClassifier(n_neighbors=3)
+# ==============================
+# Validación cruzada
+# ==============================
+cv = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=42)
 
-elif model_option == "SVM":
-    model = SVC()
+scoring = {
+    "accuracy": "accuracy",
+    "precision_macro": "precision_macro",
+    "recall_macro": "recall_macro",
+    "f1_macro": "f1_macro"
+}
 
-elif model_option == "Random Forest":
-    model = RandomForestClassifier(n_estimators=100)
+cv_results = cross_validate(
+    model,
+    X,
+    y,
+    cv=cv,
+    scoring=scoring,
+    return_train_score=False
+)
 
-elif model_option == "Logistic Regression":
-    model = LogisticRegression(max_iter=1000)
+# ==============================
+# Mostrar métricas promedio
+# ==============================
+st.subheader("📊 Resultados de Validación Cruzada")
 
-# =========================
-# ENTRENAMIENTO
-# =========================
-with st.spinner("Entrenando modelo..."):
-    model.fit(X_train, y_train)
+metrics_df = pd.DataFrame({
+    "Accuracy": cv_results["test_accuracy"],
+    "Precision": cv_results["test_precision_macro"],
+    "Recall": cv_results["test_recall_macro"],
+    "F1 Score": cv_results["test_f1_macro"]
+})
 
-y_pred = model.predict(X_test)
-accuracy = accuracy_score(y_test, y_pred)
+st.write("Promedios:")
+st.write(metrics_df.mean())
 
-# =========================
-# MÉTRICAS
-# =========================
-st.subheader("📊 Métricas de Desempeño")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    st.metric("Accuracy", f"{accuracy:.4f}")
-
-with col2:
-    st.text("Reporte de Clasificación")
-    st.text(classification_report(y_test, y_pred))
-
-# =========================
-# MATRIZ DE CONFUSIÓN
-# =========================
-st.subheader("🔎 Matriz de Confusión")
-
-cm = confusion_matrix(y_test, y_pred)
+# ==============================
+# Visualización métricas por fold
+# ==============================
+st.subheader("📈 Métricas por Fold")
 
 fig, ax = plt.subplots()
-sns.heatmap(cm, cmap="Blues", ax=ax)
+metrics_df.plot(kind="box", ax=ax)
 st.pyplot(fig)
 
-# =========================
-# VALIDACIÓN CON IMAGEN DEL DATASET
-# =========================
-st.subheader("🖼 Probar Imagen del Dataset")
+# ==============================
+# Matriz de confusión final
+# ==============================
+st.subheader("🔎 Matriz de Confusión (Entrenamiento completo)")
 
-index = st.slider("Seleccione índice de prueba", 0, len(X_test)-1, 0)
+model.fit(X, y)
+y_pred = model.predict(X)
 
-image = X_test.iloc[index].values.reshape(28, 28)
+cm = confusion_matrix(y, y_pred)
 
-st.image(image, width=200, caption="Imagen seleccionada")
+fig2, ax2 = plt.subplots()
+sns.heatmap(cm, annot=True, fmt="d", cmap="Blues", ax=ax2)
+ax2.set_xlabel("Predicción")
+ax2.set_ylabel("Real")
 
-if st.button("Predecir Imagen Dataset"):
-    prediction = model.predict([X_test.iloc[index]])
-    st.success(f"Predicción: {prediction[0]}")
-
-# =========================
-# DIBUJAR Y PREDECIR
-# =========================
-st.subheader("✍️ Dibuja un Dígito")
-
-canvas_result = st_canvas(
-    fill_color="white",
-    stroke_width=15,
-    stroke_color="black",
-    background_color="black",
-    height=280,
-    width=280,
-    drawing_mode="freedraw",
-    key="canvas",
-)
-
-if st.button("Predecir Dibujo"):
-
-    if canvas_result.image_data is not None:
-        img = Image.fromarray(
-            (canvas_result.image_data[:, :, 0]).astype("uint8")
-        )
-
-        img = img.resize((28, 28))
-        img_array = np.array(img)
-        img_array = img_array.reshape(1, 784) / 255.0
-
-        st.image(img, width=150, caption="Imagen procesada 28x28")
-
-        prediction = model.predict(img_array)
-        st.success(f"Predicción del modelo: {prediction[0]}")
+st.pyplot(fig2)
